@@ -12,7 +12,9 @@ os.environ["PYTHONWARNINGS"] = "ignore"
 warnings.filterwarnings("ignore")
 
 # --- CONFIGURATION ---
-MODEL_DIR = r"C:\Users\Benon Nyabuto\Desktop\Social-Media\Saved_Models"
+# Use relative path for cloud deployment
+# Ensure the 'Saved_Models' folder is in the same directory as this script
+MODEL_DIR = "Saved_Models"
 
 # List of all targets and their VIRAL THRESHOLDS
 THRESHOLDS = {
@@ -45,6 +47,10 @@ CONTENT_TYPES = [
 def load_all_models():
     """Loads all models into memory once at startup."""
     models = {}
+    if not os.path.exists(MODEL_DIR):
+        st.error(f"⚠️ Model directory '{MODEL_DIR}' not found. Please upload the 'Saved_Models' folder to your GitHub repository.")
+        return {}
+
     for target in TARGET_COLS:
         safe_name = target.replace(' ', '_').replace('/', '')
         model_name = f"model_{safe_name}.pkl"
@@ -56,7 +62,7 @@ def load_all_models():
             except Exception: pass
     return models
 
-# --- FEATURE ENGINE (R4-AO4 Mapping) ---
+# --- FEATURE ENGINE ---
 def get_feature_dict(date_obj, day_str, time_obj, content_type, text_content):
     # 1. TIME FEATURES
     try:
@@ -71,7 +77,7 @@ def get_feature_dict(date_obj, day_str, time_obj, content_type, text_content):
     except:
         date_val, is_weekend, time_numeric, phase = 0, 0, 12.0, "Afternoon"
 
-    # 2. CONTENT TYPE MAPPING (Fixed by User)
+    # 2. CONTENT TYPE MAPPING
     type_flags = {
         'Is_Text': 0, 'Is_9:16 Video': 0, 'Is_16:9 Video': 0, 'Is_Chart': 0,
         'Is_Carousel': 0, 'Is_Poll': 0, 'Is_Image': 0, 'Is_Image (Quote)': 0, 'Is_Real-Photo': 0
@@ -85,7 +91,7 @@ def get_feature_dict(date_obj, day_str, time_obj, content_type, text_content):
     }
     if content_type in mapping: type_flags[mapping[content_type]] = 1
 
-    # 3. NLP FEATURES (R4 - AO4)
+    # 3. NLP FEATURES
     text = str(text_content).strip()
     text_lower = text.lower()
     
@@ -93,7 +99,6 @@ def get_feature_dict(date_obj, day_str, time_obj, content_type, text_content):
     sentences = [s for s in re.split(r'[.?!]+', text) if s.strip()]
     paragraphs = [p for p in text.split('\n') if p.strip()]
     
-    # Counts (R, S, T, U, V, W)
     word_count = len(words)
     sent_count = len(sentences)
     avg_wps = word_count / sent_count if sent_count else 0
@@ -101,7 +106,6 @@ def get_feature_dict(date_obj, day_str, time_obj, content_type, text_content):
     comp_mentions = sum(text_lower.count(c) for c in ['promptbi', 'delta 40', 'google'])
     q_count = text.count('?')
     
-    # Binary Flags (X - AC)
     has_named = 1 if any(n in text_lower for n in ['bertha', 'kasiera', 'benon']) else 0
     has_job = 1 if any(t in text_lower for t in ['ceo', 'founder', 'manager']) else 0
     has_cta = 1 if any(k in text_lower for k in ['link', 'bio', 'sign up', 'dm']) else 0
@@ -109,7 +113,6 @@ def get_feature_dict(date_obj, day_str, time_obj, content_type, text_content):
     has_jargon = 1 if any(j in text_lower for j in ['sql', 'roi', 'kpi', 'dashboard']) else 0
     high_space = 1 if (para_count > 0 and (word_count/para_count) < 25) else 0
     
-    # Hooks (AD - AH)
     first_sent = sentences[0].lower() if sentences else ""
     hook_quote = 1 if '"' in first_sent or '“' in first_sent else 0
     hook_prov = 1 if any(first_sent.startswith(w) for w in ['stop', 'don\'t', 'never']) else 0
@@ -117,13 +120,11 @@ def get_feature_dict(date_obj, day_str, time_obj, content_type, text_content):
     hook_story = 1 if any(w in first_sent for w in ['yesterday', 'i remember', 'once']) else 0
     hook_q = 1 if '?' in first_sent else 0
     
-    # Perspective (AI - AL)
     p1 = 1 if re.search(r'\b(i|my|we)\b', text_lower) else 0
     p2 = 1 if re.search(r'\b(you|your)\b', text_lower) else 0
     p3 = 1 if re.search(r'\b(he|she|they)\b', text_lower) else 0
     p_mixed = 1 if (p1 + p2 + p3) > 1 else 0
     
-    # Specificity (AM - AO)
     nums = len(re.findall(r'\d+', text))
     caps = len(re.findall(r'(?<!^)(?<!\. )\b[A-Z][a-z]+\b', text))
     spec_score = nums + caps
@@ -184,59 +185,37 @@ def predict_batch(input_df, models):
             
     return results
 
-# --- CONTENT MUTATION ENGINE (Optimized) ---
+# --- CONTENT MUTATION ENGINE ---
 def optimize_content_and_time(base_date, base_day, base_time, base_type, base_content, current_results, models):
     
     best_config = None
     best_results = current_results
-    
-    # Baseline
     baseline_met = sum(1 for k, v in THRESHOLDS.items() if current_results.get(k, 0) >= v)
     max_goals_met = baseline_met
 
-    # --- SCENARIO BUILDER ---
-    # We mutate the content to trigger specific features from Columns R-AO
-    
-    # 1. TIME Strategy (Morning, Lunch, Evening)
     search_times = [9, 13, 17] 
-    
-    # 2. CONTENT MUTATIONS (Simulating rewriting)
     mutations = [
         ("", "Keep Current Content"),
-        
-        # Hooks (AD - AH)
         ("Stop scrolling! ", "Add Provocative Hook ('Stop...')"),
         ("Did you know? ", "Add Question Hook"),
         ("Yesterday, I realized... ", "Add Story Hook"),
         ("\"Success is not final.\" ", "Add Quote Hook"),
-        
-        # Structure (X - AC)
         (" Link in bio.", "Add CTA"),
-        (" Before vs After. ", "Add Transformation (Before/After)"),
+        (" Before vs After. ", "Add Transformation"),
         (" ROI KPI SQL. ", "Add Industry Jargon"),
-        ("\n\n\n", "Increase Whitespace (Line Breaks)"),
-        
-        # Perspective (AI - AL)
-        (" I believe... ", "Shift to First Person (I/We)"),
-        (" You need this. ", "Shift to Second Person (You)"),
-        
-        # Length/Depth (R - W)
-        (" " + base_content, "Double Word Count (Deep Dive)")
+        ("\n\n\n", "Increase Whitespace"),
+        (" I believe... ", "Shift to First Person"),
+        (" You need this. ", "Shift to Second Person"),
+        (" " + base_content, "Double Word Count")
     ]
     
     scenarios = [] 
     data_dicts = [] 
     
-    # We ONLY vary Time and Content (Date & Format are fixed)
     for t_hour in search_times:
         for tweak_txt, tweak_label in mutations:
-            
-            # Construct Mutation
-            # Logic: If tweak is a Hook, PREPEND. If CTA/Length, APPEND.
-            if "Hook" in tweak_label:
-                new_content = tweak_txt + base_content
-            else:
-                new_content = base_content + tweak_txt
+            if "Hook" in tweak_label: new_content = tweak_txt + base_content
+            else: new_content = base_content + tweak_txt
             
             new_time = base_time.replace(hour=t_hour, minute=0)
             
@@ -245,18 +224,15 @@ def optimize_content_and_time(base_date, base_day, base_time, base_type, base_co
                 'Action': tweak_label,
                 'Modified Content': new_content
             })
-            
             d = get_feature_dict(base_date, base_day, new_time, base_type, new_content)
             data_dicts.append(d)
 
-    # --- BATCH PREDICT ---
     if not data_dicts: return None, current_results
     
     batch_df = pd.DataFrame(data_dicts)
     batch_preds = predict_batch(batch_df, models)
     results_df = pd.DataFrame(batch_preds)
     
-    # --- SCORING ---
     goals_met_scores = np.zeros(len(results_df))
     for k, v in THRESHOLDS.items():
         if k in results_df.columns:
@@ -265,14 +241,13 @@ def optimize_content_and_time(base_date, base_day, base_time, base_type, base_co
     best_idx = np.argmax(goals_met_scores)
     best_score = goals_met_scores[best_idx]
     
-    # Tie-Breaker: Engagement Rate & Impressions
-    if best_score == max_goals_met:
+    if best_score > max_goals_met:
+        max_goals_met = best_score
+        is_better = True
+    elif best_score == max_goals_met and max_goals_met > 0:
         curr_score = (current_results.get('Engagement Rate', 0) * 1000) + current_results.get('Impression', 0)
         new_score = (results_df.iloc[best_idx].get('Engagement Rate', 0) * 1000) + results_df.iloc[best_idx].get('Impression', 0)
         is_better = new_score > curr_score
-    elif best_score > max_goals_met:
-        max_goals_met = best_score
-        is_better = True
     else:
         is_better = False
 
@@ -306,87 +281,81 @@ with st.sidebar:
     st.header("2. Variables to Optimize")
     d_time = st.time_input("Time", time(9, 0))
     
-    # --- CONDITIONAL INPUTS FOR VIDEO ---
     if "video" in d_type.lower():
         st.caption("📹 Video Content Detected")
         d_caption = st.text_area("Post Caption", height=100, placeholder="Text accompanying the video...")
         d_script = st.text_area("Video Script", height=150, placeholder="Spoken words or text overlays...")
-        # Combine them for the model (treated as one big text blob for feature extraction)
         d_content = f"{d_caption}\n\n{d_script}"
     else:
         d_content = st.text_area("Actual Content", height=200, placeholder="Paste your post content here...")
     
     predict_btn = st.button("🔮 Predict Performance", type="primary")
 
-if predict_btn and models:
-    feat_dict = get_feature_dict(d_date, d_day, d_time, d_type, d_content)
-    input_df = pd.DataFrame([feat_dict])
-    results = predict_batch(input_df, models)
-    
-    # --- GOALS DISPLAY ---
-    st.subheader("🎯 Goal Status (Current Input)")
-    met_count = 0
-    cols = st.columns(4)
-    col_idx = 0
-    for metric, threshold in THRESHOLDS.items():
-        val = results.get(metric, 0)
-        is_met = val >= threshold
-        if is_met: met_count += 1
-        
-        if 'Rate' in metric or 'Click Through' in metric:
-            val_fmt = f"{val:.1%}"
-            target_fmt = f"{threshold:.1%}"
-        else:
-            val_fmt = f"{val:,.0f}"
-            target_fmt = f"{threshold:,.0f}"
-            
-        color = "green" if is_met else "red"
-        icon = "✅" if is_met else "❌"
-        
-        with cols[col_idx % 4]:
-            st.markdown(f"**{metric}**")
-            st.markdown(f":{color}[{val_fmt}] / {target_fmt} {icon}")
-        col_idx += 1
-        
-    st.progress(met_count / len(THRESHOLDS))
-
-    # --- OPTIMIZER ---
-    st.markdown("---")
-    st.subheader("🧪 Content Re-Writing Engine")
-    
-    with st.spinner("Simulating content mutations..."):
-        config, opt_results = optimize_content_and_time(d_date, d_day, d_time, d_type, d_content, results, models)
-    
-    if config and config['Goals Met'] > config['Baseline Goals']:
-        st.success(f"🎉 FOUND A BETTER CONFIGURATION! (Hits {config['Goals Met']}/14 Goals)")
-        
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.markdown("### 📝 Recommended Changes")
-            st.write(f"**1. Time Shift:** {d_time.strftime('%H:%M')} ➝ **{config['Time']}**")
-            st.write(f"**2. Content Tweak:** {config['Action']}")
-            
-            with st.expander("👀 Preview Re-Written Content Strategy"):
-                st.info(config['Modified Content'])
-                
-        with c2:
-            st.markdown("### 📈 Projected Impact")
-            key_metrics = ['Video Views', 'Impression', 'Engagement Rate', 'Clicks']
-            kc1, kc2 = st.columns(2)
-            
-            for idx, m in enumerate(key_metrics):
-                old = results.get(m, 0)
-                new = opt_results.get(m, 0)
-                delta = (new - old) / old if old > 0 else 0
-                
-                with [kc1, kc2][idx % 2]:
-                    if 'Rate' in m: st.metric(m, f"{new:.1%}", f"{delta:+.1%}")
-                    else: st.metric(m, f"{new:,.0f}", f"{delta:+.1%}")
-                        
-    elif met_count == len(THRESHOLDS):
-        st.balloons()
-        st.success("🌟 PERFECT SCORE! No changes needed.")
+if predict_btn:
+    if not models:
+        st.error("❌ Models not found! Please ensure the 'Saved_Models' folder is uploaded to your repository.")
     else:
-        st.warning("Current content is optimal for this Date/Format. Try changing the Format if possible.")
-elif predict_btn and not models:
-    st.error("Models not found. Please run 'train_predictive_model.py' first.")
+        feat_dict = get_feature_dict(d_date, d_day, d_time, d_type, d_content)
+        input_df = pd.DataFrame([feat_dict])
+        results = predict_batch(input_df, models)
+        
+        st.subheader("🎯 Goal Status (Current Input)")
+        met_count = 0
+        cols = st.columns(4)
+        col_idx = 0
+        for metric, threshold in THRESHOLDS.items():
+            val = results.get(metric, 0)
+            is_met = val >= threshold
+            if is_met: met_count += 1
+            
+            if 'Rate' in metric or 'Click Through' in metric:
+                val_fmt = f"{val:.1%}"
+                target_fmt = f"{threshold:.1%}"
+            else:
+                val_fmt = f"{val:,.0f}"
+                target_fmt = f"{threshold:,.0f}"
+                
+            color = "green" if is_met else "red"
+            icon = "✅" if is_met else "❌"
+            
+            with cols[col_idx % 4]:
+                st.markdown(f"**{metric}**")
+                st.markdown(f":{color}[{val_fmt}] / {target_fmt} {icon}")
+            col_idx += 1
+            
+        st.progress(met_count / len(THRESHOLDS))
+
+        st.markdown("---")
+        st.subheader("🧪 Content Re-Writing Engine")
+        
+        with st.spinner("Simulating content mutations..."):
+            config, opt_results = optimize_content_and_time(d_date, d_day, d_time, d_type, d_content, results, models)
+        
+        if config and config['Goals Met'] > config['Baseline Goals']:
+            st.success(f"🎉 FOUND A BETTER CONFIGURATION! (Hits {config['Goals Met']}/14 Goals)")
+            
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                st.markdown("### 📝 Recommended Changes")
+                st.write(f"**1. Time Shift:** {d_time.strftime('%H:%M')} ➝ **{config['Time']}**")
+                st.write(f"**2. Content Tweak:** {config['Action']}")
+                
+                with st.expander("👀 Preview Re-Written Content Strategy"):
+                    st.info(config['Modified Content'])
+                    
+            with c2:
+                st.markdown("### 📈 Projected Impact")
+                key_metrics = ['Video Views', 'Impression', 'Engagement Rate', 'Clicks']
+                kc1, kc2 = st.columns(2)
+                for idx, m in enumerate(key_metrics):
+                    old = results.get(m, 0)
+                    new = opt_results.get(m, 0)
+                    delta = (new - old) / old if old > 0 else 0
+                    with [kc1, kc2][idx % 2]:
+                        if 'Rate' in m: st.metric(m, f"{new:.1%}", f"{delta:+.1%}")
+                        else: st.metric(m, f"{new:,.0f}", f"{delta:+.1%}")
+        elif met_count == len(THRESHOLDS):
+            st.balloons()
+            st.success("🌟 PERFECT SCORE! No changes needed.")
+        else:
+            st.warning("Current content is optimal for this Date/Format. Try changing the Format if possible.")
